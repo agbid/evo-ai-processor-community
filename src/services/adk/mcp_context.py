@@ -83,7 +83,8 @@ async def mcp_context(
         
         uses_streamable_http = (
             url_normalized.endswith("/mcp") or  # Standard MCP pattern (including Stripe with /mcp)
-            "mcp.paypal.com" in url  # PayPal MCP exception
+            "mcp.paypal.com" in url or  # PayPal MCP exception
+            "calendarmcp.googleapis.com" in url  # Google Calendar MCP exception
         )
         
         if uses_streamable_http:

@@ -2,14 +2,15 @@ name: Build & Publish Docker Image
 
 on:
   push:
-    branches: [main]
+    branches: [main, production]
     tags: ["v*.*.*"]
 
 permissions:
   contents: read
+  packages: write
 
 env:
-  IMAGE_NAME: evoapicloud/evo-ai-processor-community
+  IMAGE_NAME: ghcr.io/agbid/evo-ai-processor-community
 
 jobs:
   build:
@@ -30,8 +31,9 @@ jobs:
 
       - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push by digest
         id: build
@@ -74,8 +76,9 @@ jobs:
 
       - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Resolve tags
         id: tags
@@ -90,9 +93,11 @@ jobs:
 
           if [[ "${GH_REF}" == refs/tags/v* ]]; then
             VERSION="${GH_REF_NAME#v}"
-            TAGS="${IMAGE}:${VERSION},${IMAGE}:latest"
+            TAGS="${IMAGE}:${VERSION}"
+          elif [[ "${GH_REF}" == refs/heads/production ]]; then
+            TAGS="${IMAGE}:latest,${IMAGE}:production-${SHA_SHORT}"
           elif [[ "${GH_REF}" == refs/heads/main ]]; then
-            TAGS="${IMAGE}:latest,${IMAGE}:main-${SHA_SHORT}"
+            TAGS="${IMAGE}:main-${SHA_SHORT}"
           fi
 
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
