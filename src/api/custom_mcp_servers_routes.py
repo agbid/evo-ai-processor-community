@@ -57,7 +57,7 @@ router = APIRouter(
 )
 async def create_discover_tools(
     discover_tools: CustomMCPDiscoverToolsCreate,
-    permission: None = Depends(RequirePermission("ai_custom_mcp_servers", "discover")),
+    permission: None = Depends(RequirePermission("ai_custom_mcp_servers", "test")),
     _: dict = Depends(get_current_user),
 ):
     """Discover tools from a custom MCP server"""
