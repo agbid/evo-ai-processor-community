@@ -274,7 +274,7 @@ def create_calendar_event_tool(
 
     # Build business hours description
     bh_description = ""
-    if business_hours and business_hours.get("enabled"):
+    if business_hours:
         bh_description = "\n\nBUSINESS HOURS CONFIGURED:\n"
         day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
         for day_name in day_names:

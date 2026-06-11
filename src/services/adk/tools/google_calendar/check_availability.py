@@ -284,7 +284,7 @@ def create_check_availability_tool(
         min_advance_time = get_config_value("minAdvanceTime", 0)
         max_duration = get_config_value("maxDuration", 0)
 
-        logger.info(f"Finding available slots: business_hours_enabled={business_hours.get('enabled')}, timezone={timezone}, min_advance={min_advance_time}h, max_duration={max_duration}min")
+        logger.info(f"Finding available slots: business_hours_configured={bool(business_hours)}, timezone={timezone}, min_advance={min_advance_time}h, max_duration={max_duration}min")
 
         # Validate slot duration
         if max_duration > 0 and slot_duration > max_duration:
@@ -300,22 +300,28 @@ def create_check_availability_tool(
         logger.info(f"Searching slots from {current_day} to {end_day}")
 
         while current_day <= end_day:
-            # Get business hours for this day
-            day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-            day_name = day_names[current_day.weekday()]
-            day_config = business_hours.get(day_name, {}) if business_hours.get("enabled") else {}
+            if business_hours:
+                # Get business hours for this day
+                day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+                day_name = day_names[current_day.weekday()]
+                day_config = business_hours.get(day_name, {})
 
-            logger.debug(f"Checking {day_name} ({current_day.date()}): enabled={day_config.get('enabled') if day_config else False}")
+                logger.debug(f"Checking {day_name} ({current_day.date()}): enabled={day_config.get('enabled') if day_config else False}")
 
-            if not day_config or not day_config.get("enabled"):
-                # Skip non-business days
-                logger.debug(f"Skipping {day_name} - not a business day")
-                current_day += timedelta(days=1)
-                continue
+                if not day_config or not day_config.get("enabled"):
+                    # Skip non-business days
+                    logger.debug(f"Skipping {day_name} - not a business day")
+                    current_day += timedelta(days=1)
+                    continue
 
-            # Parse business hours for this day
-            start_time_str = day_config.get("start", "09:00")
-            end_time_str = day_config.get("end", "18:00")
+                # Parse business hours for this day
+                start_time_str = day_config.get("start", "09:00")
+                end_time_str = day_config.get("end", "18:00")
+            else:
+                # No business hours configured at all: don't restrict the search window,
+                # consistent with is_within_business_hours()'s "no restriction" default.
+                start_time_str = "00:00"
+                end_time_str = "23:59"
 
             hour, minute = map(int, start_time_str.split(":"))
             day_start = current_day.replace(hour=hour, minute=minute)
@@ -406,7 +412,7 @@ def create_check_availability_tool(
 
     # Build business hours description
     bh_description = ""
-    if business_hours and business_hours.get("enabled"):
+    if business_hours:
         bh_description = "\n\nBUSINESS HOURS CONFIGURED:\n"
         day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
         for day_name in day_names:

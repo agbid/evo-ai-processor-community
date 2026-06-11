@@ -873,7 +873,7 @@ class LlmAgentBuilder:
 
             # Add business hours info if configured
             business_hours = calendar_settings.get("businessHours", {})
-            if business_hours and business_hours.get("enabled"):
+            if business_hours:
                 enabled_days = []
                 for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]:
                     day_config = business_hours.get(day, {})

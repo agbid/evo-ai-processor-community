@@ -639,6 +639,8 @@ async def get_agent_messages(
                             except Exception as e:
                                 logger.error(f"Error encoding bytes to base64: {str(e)}")
                                 d[key] = None
+                        elif isinstance(value, (set, frozenset)):
+                            d[key] = list(value)
                         elif isinstance(value, dict):
                             process_dict(value)
                         elif isinstance(value, list):
@@ -655,6 +657,8 @@ async def get_agent_messages(
                                     f"Error encoding bytes to base64 in list: {str(e)}"
                                 )
                                 d[i] = None
+                        elif isinstance(item, (set, frozenset)):
+                            d[i] = list(item)
                         elif isinstance(item, (dict, list)):
                             process_dict(item)
                 return d

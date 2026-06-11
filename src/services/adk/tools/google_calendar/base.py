@@ -109,7 +109,7 @@ class GoogleCalendarClient:
         Returns:
             True if within business hours, False otherwise
         """
-        if not business_hours or not business_hours.get("enabled"):
+        if not business_hours:
             return True
 
         # Get day of week (0 = Monday, 6 = Sunday)
