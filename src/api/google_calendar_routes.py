@@ -13,8 +13,10 @@ import os
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, HTTPException, Depends, status, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from urllib.parse import quote
 
 from src.services.google_calendar_service import GoogleCalendarService
 from src.config.database import get_db
@@ -571,14 +573,31 @@ async def create_event(
         )
 
 
+def _callback_redirect(
+    frontend_url: str,
+    agent_id: Optional[str],
+    result: str,
+    message: Optional[str] = None
+) -> RedirectResponse:
+    """Build a redirect back to the CRM frontend with the OAuth result.
+
+    Lands on the agent's Integrações tab when agent_id is known, otherwise
+    falls back to the agents list.
+    """
+    if agent_id:
+        url = f"{frontend_url}/agents/{agent_id}/edit?tab=integrations&google_calendar={result}"
+    else:
+        url = f"{frontend_url}/agents/list?google_calendar={result}"
+    if message:
+        url += f"&message={quote(message)}"
+    return RedirectResponse(url=url, status_code=status.HTTP_302_FOUND)
+
+
 # Fixed OAuth Callback Endpoint (for Google Cloud Console redirect)
 @callback_router.get(
     "/callback",
-    response_model=SuccessResponse[GoogleCalendarCallbackResponse],
     responses={
-        200: {"description": "Authorization completed successfully"},
-        422: {"model": ErrorResponse, "description": "Validation error"},
-        500: {"model": ErrorResponse, "description": "Internal server error"}
+        302: {"description": "Redirects back to the CRM frontend with the authorization result"},
     }
 )
 async def oauth_callback(
@@ -591,13 +610,17 @@ async def oauth_callback(
     """
     OAuth 2.0 callback endpoint for Google Calendar (fixed URL).
 
-    This endpoint handles the OAuth redirect from Google Cloud Console.
-    The agent_id is extracted from the state parameter.
+    This endpoint handles the OAuth redirect from Google Cloud Console, completes
+    the authorization, and redirects the browser back to the CRM frontend (the
+    agent's Integrações tab) with the result.
 
     Query Parameters:
         code: Authorization code from Google OAuth
         state: Base64-encoded JSON containing agent_id
     """
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    agent_id = None
+
     try:
         # Decode state to extract agent_id
         import base64
@@ -610,12 +633,10 @@ async def oauth_callback(
         agent_id = state_data.get("agent_id")
 
         if not agent_id:
-            return error_response(
-            request=request,
-            code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
-            message="Invalid state parameter: missing agent_id",
-            status_code=status.HTTP_400_BAD_REQUEST
-        )
+            return _callback_redirect(
+                frontend_url, None, "error",
+                message="Invalid state parameter: missing agent_id"
+            )
 
         # Complete authorization using extracted IDs
         result = await service.complete_authorization(
@@ -626,34 +647,19 @@ async def oauth_callback(
         )
 
         if not result.get("success"):
-            return error_response(request=request, code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
-                message=result.get("error", "Unknown error"),
-                status_code=status.HTTP_400_BAD_REQUEST
+            return _callback_redirect(
+                frontend_url, agent_id, "error",
+                message=result.get("error", "Unknown error")
             )
 
-        calendars_data = [CalendarItem(**cal).model_dump() if isinstance(cal, dict) else cal.model_dump() if hasattr(cal, 'model_dump') else cal for cal in result.get("calendars", [])]
-
-        return success_response(
-            data={
-                "email": result.get("email"),
-                "calendars": calendars_data
-            },
-            message="Authorization completed successfully"
-        )
+        return _callback_redirect(frontend_url, agent_id, "success")
 
     except ValueError as e:
         logger.error(f"Validation error in callback: {e}")
-        return error_response(
-            request=request,
-            code=map_status_to_error_code(status.HTTP_422_UNPROCESSABLE_ENTITY),
-            message=str(e),
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY
-        )
+        return _callback_redirect(frontend_url, agent_id, "error", message=str(e))
     except Exception as e:
         logger.error(f"Error completing authorization: {e}")
-        return error_response(
-            request=request,
-            code=map_status_to_error_code(status.HTTP_500_INTERNAL_SERVER_ERROR),
-            message=f"Failed to complete authorization: {str(e)}",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        return _callback_redirect(
+            frontend_url, agent_id, "error",
+            message=f"Failed to complete authorization: {str(e)}"
         )
