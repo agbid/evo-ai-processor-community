@@ -58,9 +58,16 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
         # Skip OPTIONS requests (CORS preflight)
         if request.method == "OPTIONS":
             return await call_next(request)
-        
+
         # Skip public endpoints
         if self._should_skip(request.url.path):
+            return await call_next(request)
+
+        # Skip fixed OAuth callback endpoints (e.g. /api/v1/integrations/google-calendar/callback).
+        # These are hit directly by the browser via redirect from the OAuth provider
+        # (Google, GitHub, etc.) and never carry an Authorization header. They are
+        # protected instead by the signed/opaque `state` parameter.
+        if request.method == "GET" and self._is_oauth_callback_path(request.url.path):
             return await call_next(request)
         
         # For /sync/ routes, check X-API-Key header first (for agent bot authentication)
@@ -269,10 +276,15 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
         """Check if path should skip authentication"""
         if path in self.SKIP_PATHS:
             return True
-        
+
         # Check path prefixes
         skip_prefixes = ["/docs", "/redoc", "/openapi", "/static/"]
         return any(path.startswith(prefix) for prefix in skip_prefixes)
+
+    def _is_oauth_callback_path(self, path: str) -> bool:
+        """Check if path is a fixed OAuth callback endpoint (public by design)"""
+        import re
+        return bool(re.fullmatch(r"/api/v1/integrations/[^/]+/callback", path))
     
     def _extract_token(self, request: Request) -> tuple:
         """Extract token and determine type"""
