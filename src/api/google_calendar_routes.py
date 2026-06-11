@@ -190,6 +190,45 @@ async def get_google_calendar_service(
     )
 
 
+# Dependency to get Google Calendar service for the fixed OAuth callback.
+# This endpoint is hit directly by the browser via redirect from Google and
+# never carries an Authorization header, so unlike get_google_calendar_service
+# it must not require a user token.
+async def get_google_calendar_service_for_callback(
+    request: Request
+) -> GoogleCalendarService:
+    """Get Google Calendar service instance for the public OAuth callback (no user token required)."""
+    from src.services.global_config_service import get_global_config_service
+
+    config_service = get_global_config_service()
+    credentials = await config_service.get_google_calendar_credentials()
+
+    client_id = credentials.get("client_id")
+    client_secret = credentials.get("client_secret")
+    redirect_uri = credentials.get("redirect_uri")
+
+    if not client_id or not client_secret or not redirect_uri:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Google Calendar OAuth credentials not configured in global_config. "
+                   "Please configure: google_calendar_client_id, google_calendar_client_secret, "
+                   "google_calendar_redirect_uri in the CRM global configuration."
+        )
+
+    core_service_url = os.getenv("CORE_SERVICE_URL", "http://localhost:5555/api/v1")
+
+    auth_header = request.headers.get("Authorization", "")
+    user_token = auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else ""
+
+    return GoogleCalendarService(
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+        core_service_url=core_service_url,
+        user_token=user_token
+    )
+
+
 # API Routes
 @router.post(
     "/authorization",
@@ -543,9 +582,10 @@ async def create_event(
     }
 )
 async def oauth_callback(
+    request: Request,
     code: str,
     state: str,
-    service: GoogleCalendarService = Depends(get_google_calendar_service),
+    service: GoogleCalendarService = Depends(get_google_calendar_service_for_callback),
     db: Session = Depends(get_db)
 ):
     """
