@@ -200,6 +200,13 @@ class GoogleCalendarService:
             # Fetch available calendars
             calendars = await self.get_calendars(agent_id, db=db)
 
+            # Mark the user-facing "google_calendar" integration as connected.
+            # Credentials are stored under "google_calendar_credentials", but the
+            # frontend reads connection status from "google_calendar" — without
+            # this it keeps showing the "Connect with Google" screen even after
+            # a successful authorization.
+            await self._mark_connected(agent_id, email, calendars, db=db)
+
             return {
                 "success": True,
                 "email": email,
@@ -556,6 +563,47 @@ class GoogleCalendarService:
             )
 
             response.raise_for_status()
+
+    async def _mark_connected(
+        self,
+        agent_id: str,
+        email: Optional[str],
+        calendars: List[Dict[str, Any]],
+        db: Optional[Any] = None
+    ) -> None:
+        """Update the "google_calendar" integration with the connection status.
+
+        Preserves any existing user-configured settings (e.g. selected calendar,
+        booking rules) while marking the integration as connected and refreshing
+        the email/calendars returned by Google.
+        """
+        try:
+            if db:
+                from src.services.agent_service import (
+                    get_agent_integration_by_provider,
+                    upsert_agent_integration,
+                )
+                existing_config = await get_agent_integration_by_provider(
+                    db, agent_id, "google_calendar"
+                ) or {}
+                existing_config.update({
+                    "provider": "google_calendar",
+                    "connected": True,
+                    "email": email,
+                    "calendars": calendars,
+                })
+                await upsert_agent_integration(db, agent_id, "google_calendar", existing_config)
+            else:
+                existing_config = await self.get_configuration(agent_id) or {}
+                existing_config.update({
+                    "provider": "google_calendar",
+                    "connected": True,
+                    "email": email,
+                    "calendars": calendars,
+                })
+                await self.save_configuration(agent_id, existing_config)
+        except Exception as e:
+            logger.error(f"Error marking Google Calendar integration as connected: {e}")
 
     async def _load_credentials(
         self,
