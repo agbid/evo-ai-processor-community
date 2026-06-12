@@ -39,6 +39,7 @@ def create_calendar_event_tool(
         attendees: Optional[List[str]] = None,
         calendar_id: str = "primary",
         check_availability: bool = True,
+        reminder_minutes_before: Optional[List[int]] = None,
         tool_context: Optional[ToolContext] = None,
     ) -> Dict[str, Any]:
         """
@@ -70,6 +71,10 @@ def create_calendar_event_tool(
             attendees: Optional list of attendee emails
             calendar_id: Which calendar to use
             check_availability: Whether to verify no conflicts exist
+            reminder_minutes_before: Optional list of reminder offsets, in minutes
+                before the event start (e.g. [60, 300, 1440, 4320] for 1h, 5h,
+                1 day and 3 days before). Sets reminders/notifications on this
+                same event - do NOT create separate "Lembrete" events for this.
             tool_context: Tool execution context
 
         Returns:
@@ -193,7 +198,8 @@ def create_calendar_event_tool(
                 end_time=end_dt,
                 description=description,
                 attendees=attendees,
-                calendar_id=calendar_id
+                calendar_id=calendar_id,
+                reminder_minutes_before=reminder_minutes_before
             )
 
             if result["status"] == "error":
@@ -319,11 +325,16 @@ Args:
     attendees (list, optional): List of attendee email addresses (default: None)
     calendar_id (str, optional): Calendar ID where event should be created (default: 'primary')
     check_availability (bool, optional): Whether to check availability before creating event (default: True)
+    reminder_minutes_before (list, optional): List of reminder offsets in minutes before the
+        event start (e.g. [60, 300, 1440, 4320] for 1 hour, 5 hours, 1 day and 3 days before).
+        Use this to set alerts/reminders on the event itself - never create separate
+        "Lembrete"/"Reminder" calendar events for this purpose.
 
 Examples:
 - Schedule a meeting: title='Customer Meeting', start_date='2024-01-16T14:00:00', end_date='2024-01-16T15:00:00'
 - Create event with attendees: title='Team Sync', start_date='2024-01-16T10:00:00', end_date='2024-01-16T11:00:00', attendees=['john@example.com', 'jane@example.com']
 - Schedule without availability check: title='Personal Task', start_date='2024-01-16T09:00:00', end_date='2024-01-16T09:30:00', check_availability=False
+- Schedule with reminders 1h, 5h, 1 day and 3 days before: title='Reunião de Apresentação', start_date='2024-01-16T14:00:00', end_date='2024-01-16T15:00:00', reminder_minutes_before=[60, 300, 1440, 4320]
 """
 
     return create_calendar_event

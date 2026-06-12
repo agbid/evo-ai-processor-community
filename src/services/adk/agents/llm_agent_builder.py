@@ -924,6 +924,18 @@ class LlmAgentBuilder:
                 "automatically by the tools."
             )
 
+            # Add reminder instructions
+            calendar_instructions.append(
+                "If you need to set alert/reminder notifications before a meeting "
+                "(e.g. 1 hour, 5 hours, 1 day, 3 days before), pass the "
+                "'reminder_minutes_before' argument to create_calendar_event (a list "
+                "of minutes before the start, e.g. [60, 300, 1440, 4320]). This sets "
+                "notifications on the meeting itself - never create separate "
+                "'Lembrete'/'Reminder' calendar events for this purpose. Rescheduling "
+                "the meeting with update_calendar_event automatically moves its "
+                "reminders too, so no extra events need to be managed."
+            )
+
             crm_tools_instructions.append("\n".join(calendar_instructions))
 
         if crm_tools_instructions:

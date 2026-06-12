@@ -425,7 +425,8 @@ class GoogleCalendarClient:
         end_time: datetime,
         description: str = "",
         attendees: Optional[List[str]] = None,
-        calendar_id: str = "primary"
+        calendar_id: str = "primary",
+        reminder_minutes_before: Optional[List[int]] = None
     ) -> Dict[str, Any]:
         """
         Create a calendar event.
@@ -439,6 +440,10 @@ class GoogleCalendarClient:
             description: Event description
             attendees: List of attendee email addresses
             calendar_id: Calendar ID (default: primary)
+            reminder_minutes_before: Optional list of reminder offsets, in minutes
+                before the event start, e.g. [60, 300, 1440, 4320] for 1h, 5h,
+                1 day and 3 days before. Sets the event's own reminders instead
+                of creating separate calendar events.
 
         Returns:
             Dictionary with created event information
@@ -519,6 +524,21 @@ class GoogleCalendarClient:
                         'conferenceSolutionKey': {'type': 'hangoutsMeet'}
                     }
                 }
+
+            # Add custom reminders instead of relying on the calendar's defaults.
+            # Google Calendar allows at most 5 overrides, each between 0 and
+            # 40320 minutes (4 weeks) before the event.
+            if reminder_minutes_before:
+                overrides = [
+                    {'method': 'popup', 'minutes': minutes}
+                    for minutes in reminder_minutes_before
+                    if 0 <= minutes <= 40320
+                ][:5]
+                if overrides:
+                    event['reminders'] = {
+                        'useDefault': False,
+                        'overrides': overrides,
+                    }
 
             # Create event
             send_invitations = get_config_value("sendInvitations", False)
