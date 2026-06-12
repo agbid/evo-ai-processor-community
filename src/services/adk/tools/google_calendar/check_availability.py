@@ -161,7 +161,8 @@ def create_check_availability_tool(
 
             # Check business hours
             business_hours = get_config_value("businessHours", {})
-            within_business_hours = client.is_within_business_hours(start_dt, business_hours)
+            always_open = get_config_value("alwaysOpen", False)
+            within_business_hours = client.is_within_business_hours(start_dt, business_hours, always_open)
 
             # Check minimum advance time
             timezone = get_config_value("timezone", "America/Sao_Paulo")
@@ -215,6 +216,7 @@ def create_check_availability_tool(
             if not result["available"]:
                 response["conflicting_events"] = [
                     {
+                        "id": event.get("id"),
                         "summary": event.get("summary", "Untitled"),
                         "start": event.get("start", {}).get("dateTime"),
                         "end": event.get("end", {}).get("dateTime")
@@ -280,11 +282,12 @@ def create_check_availability_tool(
 
         available_slots = []
         business_hours = get_config_value("businessHours", {})
+        always_open = get_config_value("alwaysOpen", False)
         timezone = get_config_value("timezone", "America/Sao_Paulo")
         min_advance_time = get_config_value("minAdvanceTime", 0)
         max_duration = get_config_value("maxDuration", 0)
 
-        logger.info(f"Finding available slots: business_hours_configured={bool(business_hours)}, timezone={timezone}, min_advance={min_advance_time}h, max_duration={max_duration}min")
+        logger.info(f"Finding available slots: business_hours_configured={bool(business_hours)}, always_open={always_open}, timezone={timezone}, min_advance={min_advance_time}h, max_duration={max_duration}min")
 
         # Validate slot duration
         if max_duration > 0 and slot_duration > max_duration:
@@ -300,7 +303,7 @@ def create_check_availability_tool(
         logger.info(f"Searching slots from {current_day} to {end_day}")
 
         while current_day <= end_day:
-            if business_hours:
+            if business_hours and not always_open:
                 # Get business hours for this day
                 day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
                 day_name = day_names[current_day.weekday()]
@@ -438,6 +441,10 @@ def create_check_availability_tool(
 This tool can:
 1. Check if a specific time slot is available
 2. Find available time slots within a date range
+
+If the time slot is NOT available, the response includes "conflicting_events", each with an
+"id" field. To cancel/reschedule one of those events, pass that "id" as the event_id argument
+to the delete_calendar_event tool (do NOT create a new "cancellation" event).
 {bh_description}{constraints_description}
 
 IMPORTANT: Always respect the business hours and scheduling constraints above when suggesting meeting times to customers.

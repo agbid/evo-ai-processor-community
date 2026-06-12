@@ -868,7 +868,8 @@ class LlmAgentBuilder:
 
             calendar_instructions = []
             calendar_instructions.append(
-                "Google Calendar Tools: Available for checking availability and creating calendar events."
+                "Google Calendar Tools: Available for checking availability, creating, "
+                "rescheduling/editing and cancelling calendar events."
             )
 
             # Add business hours info if configured
@@ -914,8 +915,13 @@ class LlmAgentBuilder:
             # Add tool usage instructions
             calendar_instructions.append(
                 "Use check_calendar_availability to find available time slots, "
-                "and create_calendar_event to schedule meetings. All restrictions are "
-                "enforced automatically by the tools."
+                "create_calendar_event to schedule meetings, update_calendar_event to "
+                "reschedule or edit an existing meeting, and delete_calendar_event to "
+                "cancel one. To cancel or reschedule a meeting, first find its 'id' via "
+                "check_calendar_availability's conflicting_events, then call "
+                "update_calendar_event or delete_calendar_event with that id - never "
+                "create a new 'cancellation' event. All restrictions are enforced "
+                "automatically by the tools."
             )
 
             crm_tools_instructions.append("\n".join(calendar_instructions))
