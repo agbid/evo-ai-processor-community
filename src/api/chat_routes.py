@@ -75,6 +75,59 @@ router = APIRouter(
     tags=["chat"],
 )
 
+def _unwrap_crm_response(response):
+    """Unwrap the {"success": ..., "data": ...} envelope used by the CRM API."""
+    if isinstance(response, dict) and "data" in response:
+        return response["data"]
+    return response
+
+
+async def build_contact_test_metadata(contact_id: str) -> Optional[dict]:
+    """Build session metadata from a CRM contact, mirroring what the Rails
+    gateway sends for real conversations, so tools like update_contact and
+    transfer_to_human can be exercised from "Teste seu agente"."""
+    from src.services.adk.tools.evo_crm.base import EvoCrmClient
+
+    client = EvoCrmClient()
+
+    try:
+        contact_response = await client.get(f"/contacts/{contact_id}")
+    except Exception as e:
+        logger.warning(f"Failed to load contact {contact_id} for chat test metadata: {e}")
+        return None
+
+    contact_data = _unwrap_crm_response(contact_response)
+    if not isinstance(contact_data, dict):
+        logger.warning(f"Unexpected contact payload for {contact_id}: {contact_data!r}")
+        return None
+
+    contact_data.setdefault("id", contact_id)
+
+    conversation_id = None
+    try:
+        conversations_response = await client.get(f"/contacts/{contact_id}/conversations")
+        conversations = _unwrap_crm_response(conversations_response)
+        if isinstance(conversations, dict):
+            conversations = conversations.get("conversations") or conversations.get("payload")
+        if isinstance(conversations, list) and conversations:
+            conversation_id = conversations[0].get("id")
+    except Exception as e:
+        logger.warning(f"Failed to load conversations for contact {contact_id}: {e}")
+
+    evoai_crm_data = {
+        "contact_id": contact_id,
+        "contact": contact_data,
+    }
+    if conversation_id:
+        evoai_crm_data["conversation_id"] = str(conversation_id)
+
+    return {
+        "contact": contact_data,
+        "contactId": contact_id,
+        "evoai_crm_data": evoai_crm_data,
+    }
+
+
 async def get_jwt_token_ws(token: str, skip_validation: bool = False) -> Optional[dict]:
     """
     Verifies token for WebSocket using EvoAuth service.
@@ -636,6 +689,10 @@ async def chat(
     user_id = current_user.get("user_id") or current_user.get("sub") or current_user.get("email")
 
     try:
+        metadata = None
+        if payload.contact_id:
+            metadata = await build_contact_test_metadata(payload.contact_id)
+
         final_response = await run_agent_adk(
             agent_id,
             user_id,
@@ -646,6 +703,7 @@ async def chat(
             db,
             session_id=session_id,
             files=payload.files,
+            metadata=metadata,
         )
 
         return success_response(

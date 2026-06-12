@@ -51,6 +51,15 @@ class ChatRequest(BaseModel):
     files: Optional[List[FileData]] = Field(
         None, description="List of files attached to the message"
     )
+    contact_id: Optional[str] = Field(
+        None,
+        description=(
+            "CRM contact ID to simulate the conversation context. When provided, "
+            "the contact's data and an associated conversation are loaded from the "
+            "CRM and exposed to the agent's tools (e.g. update_contact, "
+            "transfer_to_human) the same way they are in real conversations."
+        ),
+    )
 
 
 class ChatResponse(BaseModel):

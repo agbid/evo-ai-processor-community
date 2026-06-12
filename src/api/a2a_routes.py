@@ -1029,8 +1029,16 @@ async def handle_message_send(
         )
 
         metadata = extract_metadata_from_request(params)
+
+        # Ensure tools like transfer_to_human can resolve the conversation UUID
+        # from session state - contextId IS that UUID, but Rails sends it as a
+        # top-level A2A param, not inside metadata.evoai_crm_data.
+        evoai_crm_data = metadata.setdefault("evoai_crm_data", {})
+        if isinstance(evoai_crm_data, dict) and not evoai_crm_data.get("conversation_id"):
+            evoai_crm_data["conversation_id"] = context_id
+
         logger.info(f"📋 Extracted metadata: {metadata}")
-        
+
         # Extract userId from params (contact_id sent from Rails)
         # contextId is the conversation UUID, but userId should be the contact UUID
         user_id = params.get("userId") or context_id
