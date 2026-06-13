@@ -1066,6 +1066,267 @@ mesmo jeito, sempre com horários reais da ferramenta.
 
 ---
 
+## Fixes adicionais (sessão 13/06/2026) — labels, pipeline manipulation e ApiErrorCodes
+
+Continuação dos testes ponta a ponta do `inter_rural_atendimento`, agora
+cobrindo `allow_manage_labels` (Task #19) e `allow_pipeline_manipulation`
+(Task #20). Resultou em mais 2 correções de código (uma ainda não hotfixada
+em produção) e 1 achado de configuração (instrução do agente) ainda sem fix.
+
+---
+
+## Fix 17 — `GET/POST /conversations/:id/labels` retornava `204 No Content` (apagava labels existentes)
+
+**Commit:** `1b79f66` (`evo-ai-crm-community`, PR
+[#145](https://github.com/evolution-foundation/evo-ai-crm-community/pull/145),
+**hotfixado em produção em 13/06/2026**)
+**Arquivo:** `app/controllers/concerns/label_concern.rb`
+
+### Problema
+
+`LabelConcern#index` e `#create` setavam `@labels` mas não chamavam `render`
+nem têm view jbuilder — Rails respondia `204 No Content` com corpo vazio.
+
+A tool `manage_conversation_labels` do AI Processor faz `GET
+/conversations/:id/labels` antes de um `add`/`remove` para ler
+`current_labels`. Com o 204, ela sempre lia `current_labels = []`. Como o
+`POST` (`update_labels`) é **replace**, não **append**, qualquer chamada da
+tool apagava todas as labels existentes da conversa — incluindo
+`atendimento_ia`, que mantém a IA elegível para responder. Sem essa label, o
+postback seguinte falha com `422` e a resposta do agente é descartada.
+
+### Descoberto via
+
+Teste end-to-end do `inter_rural_atendimento` com `allow_manage_labels=true`:
+um `remove` de label reportou sucesso (`"None of the requested labels were
+present; nothing to update"`) mas a label removida continuou no banco —
+consistente com `current_labels` sempre vindo `[]` por causa do 204.
+
+### Fix
+
+```ruby
+def create
+  model.update_labels(resolve_label_titles(permitted_params[:labels]))
+  @labels = model.label_list
+  render json: { payload: @labels }
+end
+
+def index
+  @labels = model.label_list
+  render json: { payload: @labels }
+end
+```
+
+### Status
+
+Hotfixado em produção em 13/06/2026: `git show
+fix/labels-endpoint-204-render:app/controllers/concerns/label_concern.rb` →
+`docker cp` para
+`evocrm_evocrm_crm.1.vuehzngyews0wvuki0h1b4ux4:/app/app/controllers/concerns/label_concern.rb`
+→ `ruby -c` (sintaxe OK) → `kill -USR2 1` (reload do Puma sem downtime) →
+boot limpo confirmado nos logs (WebSocket reconectou, `/health/live` 200).
+PR [#145](https://github.com/evolution-foundation/evo-ai-crm-community/pull/145)
+ainda aberta (precisa merge); test plan da PR (`add`/`remove` de labels via
+`manage_conversation_labels` numa conversa real, confirmando via SQL que
+`atendimento_ia` não é apagada) ainda não foi executado.
+
+---
+
+## Fix 18 — `ApiErrorCodes` com 12 constantes usadas mas nunca definidas → `NameError` → `500 INTERNAL_ERROR`
+
+**Commit:** `e02c3c9` (`evo-ai-crm-community`, PR
+[#146](https://github.com/evolution-foundation/evo-ai-crm-community/pull/146),
+aberto — **hotfix já aplicado em produção** via `docker cp` + restart do Puma
+via `SIGUSR2`)
+**Arquivos:**
+- `app/models/concerns/api_error_codes.rb`
+- `app/controllers/api/v1/pipeline_items_controller.rb`
+
+### Problema
+
+`error_response(ApiErrorCodes::XXX, ...)` é usado em vários controllers, mas
+12 constantes referenciadas nunca foram definidas no módulo
+`ApiErrorCodes` (`CONTACT_NOT_FOUND`, `CONVERSATION_NOT_FOUND`,
+`TEAM_NOT_FOUND`, `LABEL_NOT_FOUND`, `AUTOMATION_RULE_NOT_FOUND`,
+`MACRO_NOT_FOUND`, `CUSTOM_FILTER_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`,
+`CUSTOM_ATTRIBUTE_NOT_FOUND`, `CANNOT_DELETE_RESOURCE`,
+`METHOD_NOT_ALLOWED`, `OPERATION_FAILED`). Qualquer code path que tentasse
+usar uma dessas constantes disparava `NameError: uninitialized constant
+ApiErrorCodes::XXX`, que o Rails converte em `500 INTERNAL_ERROR` — mascarando
+o que deveria ser um `404`/`405`/`409`/`422` limpo.
+
+### Descoberto via
+
+Teste end-to-end do `inter_rural_atendimento` com
+`allow_pipeline_manipulation=true`: a tool `pipeline_manipulation` (action
+`add_to_pipeline`) recebeu `HTTP 500 INTERNAL_ERROR` do CRM. Confirmado nos
+logs de produção: `NameError: uninitialized constant
+ApiErrorCodes::CONVERSATION_NOT_FOUND` em
+`Api::V1::PipelineItemsController#create`, linha 45.
+
+### Fix
+
+1. `api_error_codes.rb` — adicionadas as 12 constantes faltantes, organizadas
+   nas seções 404/405/409/422 já existentes.
+2. `pipeline_items_controller.rb` — as duas respostas de "not found"
+   (`conversation` e `contact`) passaram a incluir `status: :not_found`,
+   seguindo o padrão dos outros 9 controllers que já usam
+   `ApiErrorCodes::*_NOT_FOUND`.
+
+> `status_for`/`client_error?`/`server_error?` em `api_error_codes.rb` são
+> dead code (nenhum caller no codebase) — as ~22 outras constantes referenciadas
+> só dentro do `case` desses métodos não causam crash em runtime e foram
+> deixadas de fora deste fix (fora de escopo).
+
+### Hotfix em produção
+
+`docker cp` dos 2 arquivos para
+`evocrm_evocrm_crm.1.vuehzngyews0wvuki0h1b4ux4` (`/app/app/...`) + `kill
+-USR2 1` (hot-restart do Puma, mesmo container/PID 1). Verificado: boot limpo
+do Puma, `/health/live` 200 OK, WebSocket reconectado.
+
+### Validação em produção (sessão `481098f5`, contato "Fabricio Henrique")
+
+Antes do hotfix: `POST .../pipeline_items` (action `add_to_pipeline`) → `500
+INTERNAL_ERROR`.
+
+Depois do hotfix, mesma classe de chamada (`PATCH
+.../pipeline_items/:id/move_to_stage`, `id` = `34b6991a-...` =
+`conversation_id` de Fabricio Henrique):
+
+```
+Filter chain halted as :set_pipeline_item rendered or redirected
+Completed 404 Not Found in 64ms
+```
+
+Resposta da tool para o agente: `"Conversation not found in pipeline or stage
+not found. Make sure the contact is already in the pipeline (use
+'add_to_pipeline' first)."` — erro **limpo e tratado** (não mais 500/NameError).
+O `404` aqui é correto: a conversa de fato não está em nenhum pipeline ainda
+(ver Achado abaixo).
+
+---
+
+## Fix 19 — `inter_rural_atendimento` nunca chamava `add_to_pipeline` proativamente + `pipeline_manipulation` confiava em IDs vindos do LLM (404s intermitentes)
+
+**Tipo:** 1 alteração de `instruction` (sem commit, `evo_core_agents.instruction`)
++ 1 fix de código em `pipeline_manipulation.py`.
+**Agente:** `inter_rural_atendimento` (`afbeaa63-eeb3-418e-901d-5eacc32fe75c`)
+**Arquivo:** `src/services/adk/tools/evo_crm/pipeline_manipulation.py`
+
+### Problema 1 — agente nunca chamava `add_to_pipeline` por conta própria
+
+A config `pipeline_rules` do agente está correta — mapeia 7 estágios do
+pipeline "Expansão" (`e44667fd-c74f-46b8-ba6d-62356a81c56e`), com instruções
+por estágio (ex.: estágio "Apresentação Agendada" =
+`88566a96-491f-48bb-8274-f09e6138048e`, instrução "mova para cá imediatamente
+após confirmar o agendamento"). O agente **resolve corretamente** `stage_name
+→ stage_id` (confirmado no log: `new_stage_id =
+88566a96-491f-48bb-8274-f09e6138048e` para "Apresentação Agendada").
+
+Porém a `instruction` principal do agente (texto livre, 18 linhas) **não
+mencionava `pipeline_manipulation`, `add_to_pipeline` nem `move_to_stage` em
+nenhum momento** — nada dizia ao agente **quando** chamar `add_to_pipeline`
+proativamente (sem o usuário pedir explicitamente).
+
+Reproduzido na sessão `481098f5` ("Teste seu agente", contato "Fabricio
+Henrique"): agente chamou `move_to_stage(stage_name="Apresentação Agendada")`
+**sem nunca ter chamado `add_to_pipeline` antes** → CRM respondeu `404 Not
+Found` (correto — `set_pipeline_item` não encontrou `pipeline_item` para essa
+conversa). Confirmado via SQL: `pipeline_items` tinha **0 linhas** pra essa
+conversa nesse momento. O agente ignorou a falha e respondeu normalmente ao
+cliente (a falha não aparece pro usuário final, só no "Teste seu agente").
+
+### Problema 2 — `pipeline_manipulation` aceitava `conversation_id`/`contact_id` enviados pelo LLM, mesmo quando errados
+
+Descoberto testando numa **conversa real** (não "Teste seu agente",
+conversation_id `34b6991a-4335-456d-9bf0-12d5c3e969a9`, display_id 4,
+contato "Fabricio Henrique"). Reconstruindo a timeline via mensagens +
+logs do `evocrm_evocrm_crm` + `stage_movements`:
+
+| Hora (UTC) | Chamada do agente | `item_id`/`id` usado | Resultado |
+|---|---|---|---|
+| 14:13:00 | `add_to_pipeline` | `bc8a9a78-...` (**ID do CONTATO**, não da conversa) | `404 Not Found` |
+| 14:15:02 | `move_to_stage` | `bc8a9a78-...` (mesmo ID errado) | `404 Not Found` |
+| 14:18:01 | `add_to_pipeline` | `34b6991a-...` (ID correto da conversa) | `400` (já existe — pipeline_item já tinha sido criado manualmente) |
+| 14:20:21 | `move_to_stage` | `34b6991a-...` (correto) | `200 OK` ✅ moveu "Novo Lead" → "Qualificação" |
+
+Ou seja: **o tool funciona perfeitamente fim-a-fim numa conversa real**
+(Fix 18 confirmado: 404 limpo em vez de 500; `move_to_stage` grava em
+`pipeline_items`/`stage_movements` e atualiza o Kanban via ActionCable). O
+problema é que nas duas primeiras tentativas o LLM confundiu o ID do
+**contato** com o `conversation_id`, e `pipeline_manipulation.py` aceitava
+esse valor sem validar contra o contexto confiável da sessão
+(`tool_context.state["evoai_crm_data"]`), gerando 2 falhas evitáveis e
+mensagens confusas pro usuário ("Tentei adicionar, mas o sistema não
+encontrou a conversa no pipeline agora...").
+
+### Efeito
+
+A feature "Permitir manipular pipelines" funciona, mas de forma errática:
+falha quando o usuário não pede explicitamente (Problema 1) e/ou quando o
+LLM manda o ID errado (Problema 2) — só funciona de forma confiável depois
+de algumas tentativas com feedback do usuário.
+
+### Fix aplicado
+
+**1) `pipeline_manipulation.py`** — inverter a prioridade: sempre extrair
+`conversation_id`/`contact_id` de `tool_context.state` (fonte confiável)
+primeiro, e só usar o valor enviado pelo LLM como fallback se a extração do
+contexto não retornar nada. Loga um warning quando o LLM manda um ID
+diferente do extraído (para detectar esse padrão de confusão no futuro):
+
+```python
+effective_contact_id = None
+if tool_context:
+    effective_contact_id = _extract_contact_id_from_metadata(tool_context)
+if not effective_contact_id:
+    effective_contact_id = contact_id
+
+effective_conversation_id = None
+if tool_context:
+    effective_conversation_id = _extract_conversation_id_from_metadata(tool_context)
+if not effective_conversation_id:
+    effective_conversation_id = conversation_id
+
+if conversation_id and effective_conversation_id != conversation_id:
+    logger.warning(f"Ignoring LLM-supplied conversation_id={conversation_id} ...")
+if contact_id and effective_contact_id != contact_id:
+    logger.warning(f"Ignoring LLM-supplied contact_id={contact_id} ...")
+```
+
+**2) `evo_core_agents.instruction`** (hotfix direto via `rails runner`/SQL em
+produção, agente `afbeaa63-eeb3-418e-901d-5eacc32fe75c`) — novo parágrafo
+"GERENCIAMENTO DE PIPELINE", **sem hardcodar nomes de pipeline/estágio**
+(a tool já recebe `pipeline_rules` dinamicamente e descreve pipelines/estágios
+disponíveis no próprio docstring):
+
+```
+GERENCIAMENTO DE PIPELINE: se DADOS DO CONTATO indicar que esta conversa
+ainda não está em nenhuma pipeline, use a tool pipeline_manipulation
+(add_to_pipeline) pra adicionar o lead na pipeline configurada, escolhendo
+o estágio inicial conforme as instruções de cada estágio descritas na
+própria tool e o nível de interesse que o lead já demonstrou. A partir daí,
+use move_to_stage pra avançar o lead pelos estágios conforme a conversa
+evolui, seguindo sempre as instruções e nomes de estágio que a tool
+informar (nunca invente nomes de pipeline ou estágio). Isso é só uso
+interno, nunca mencione pipeline, estágios ou esse gerenciamento pro
+cliente.
+```
+
+### Status
+
+- Instrução do agente: **hotfixada em produção** em 13/06/2026 (UPDATE direto
+  via SQL, `instruction` agora com 3624 chars).
+- `pipeline_manipulation.py`: alterado localmente, **ainda não hotfixado em
+  produção** — o processor (`evocrm_evocrm_processor`) roda `uvicorn` sem
+  `--reload` como PID 9 dentro de um `sh -c` (PID 1); matar PID 9 derruba o
+  container inteiro e o Swarm recria a partir da imagem `:latest` (perdendo
+  qualquer `docker cp`). Requer build/push da imagem via CI/CD (branch
+  `production`, fork `agbid`) seguido de `docker service update --force`.
+
+---
+
 ## Estrutura de dados de referência
 
 ### `agent.config.integrations["google-calendar"]` (no Postgres, tabela `evo_core_agents`, coluna `config`)
@@ -1146,13 +1407,30 @@ mesmo jeito, sempre com horários reais da ferramenta.
   anterior — **não** o token de `mcc@agencia.bid`, que deve permanecer ativo.
 - **Mergear PRs já hotfixados em produção** em `evo-ai-crm-community`:
   [#143](https://github.com/evolution-foundation/evo-ai-crm-community/pull/143)
-  (PermissionFilterService) e
+  (PermissionFilterService),
   [#144](https://github.com/evolution-foundation/evo-ai-crm-community/pull/144)
-  (Fix 15, `/contacts/:id/conversations`).
+  (Fix 15, `/contacts/:id/conversations`) e
+  [#146](https://github.com/evolution-foundation/evo-ai-crm-community/pull/146)
+  (Fix 18, `ApiErrorCodes`).
+- **Aplicar hotfix + finalizar PR [#145](https://github.com/evolution-foundation/evo-ai-crm-community/pull/145)**
+  (Fix 17, labels 204) — diferente do #146, este **ainda não foi hotfixado em
+  produção**. Mesmo mecanismo: `docker cp` de
+  `app/controllers/concerns/label_concern.rb` para
+  `evocrm_evocrm_crm.1.vuehzngyews0wvuki0h1b4ux4` + `kill -USR2 1`. Depois,
+  rodar o test plan da PR (`add`/`remove` de labels via
+  `manage_conversation_labels` numa conversa real e confirmar via SQL que as
+  demais labels — principalmente `atendimento_ia` — não são apagadas).
+- **Commitar + abrir PR + deployar o fix do `pipeline_manipulation.py`** (Fix
+  19, Problema 2) — alterado localmente em `evo-ai-processor-community`
+  (branch `production`, fork `agbid`), ainda não commitado nem hotfixado.
+  Requer build/push da imagem via CI/CD seguido de `docker service update
+  --force` em `evocrm_evocrm_processor` (in-place `docker cp` não funciona
+  nesse container, ver "Status" do Fix 19).
 - **Efeito colateral real do Fix 14**: o teste de `transfer_to_human` reatribuiu
   de fato a conversa `34b6991a-4335-456d-9bf0-12d5c3e969a9` (contato "Fabricio
-  Sahdo") para o agente humano `mcc@agencia.bid` em produção. Avaliar se
-  precisa ser revertido manualmente.
+  Sahdo", agora renomeado para "Fabricio Henrique" — usado como contato padrão
+  de testes a partir de 13/06/2026) para o agente humano `mcc@agencia.bid` em
+  produção. Avaliar se precisa ser revertido manualmente.
 
 ---
 
@@ -1184,14 +1462,17 @@ mesmo jeito, sempre com horários reais da ferramenta.
 | `90c01f4` | fix(chat): surface tool error messages in agent test chat |
 | `54e3a29` | feat(agents): add contact selector to agent test chat |
 
-### `evo-ai-crm-community` (branch `fix/contacts-conversations-endpoint`, fork `agbid`, PR aberto)
+### `evo-ai-crm-community` (PRs abertos, fork `agbid`)
 
-| Commit | Mensagem |
-|---|---|
-| `2c217d7` | fix(contacts): render conversations list for GET /contacts/:id/conversations |
+| Commit | Branch / PR | Mensagem | Hotfix em produção? |
+|---|---|---|---|
+| `2c217d7` | `fix/contacts-conversations-endpoint` / [#144](https://github.com/evolution-foundation/evo-ai-crm-community/pull/144) | fix(contacts): render conversations list for GET /contacts/:id/conversations | sim |
+| `1b79f66` | `fix/labels-endpoint-204-render` / [#145](https://github.com/evolution-foundation/evo-ai-crm-community/pull/145) | fix(labels): renderizar JSON no GET/POST de labels (corrige 204 que apagava tags) — Fix 17 | **não** |
+| `e02c3c9` | `fix/api-error-codes-missing-constants` / [#146](https://github.com/evolution-foundation/evo-ai-crm-community/pull/146) | fix(api): define missing ApiErrorCodes constants used by error_response — Fix 18 | sim |
 
 ### Alteração de instrução (sem commit — `evo_core_agents.instruction` em produção)
 
 | Agente | O que mudou |
 |---|---|
 | `inter_rural_atendimento` (`afbeaa63-eeb3-418e-901d-5eacc32fe75c`) | Parágrafo "SEU OBJETIVO É AGENDAR REUNIÕES" passou a exigir `check_calendar_availability(find_slots=true)` antes de sugerir/validar horários — ver Fix 16 |
+| `inter_rural_atendimento` (`afbeaa63-eeb3-418e-901d-5eacc32fe75c`) | Novo parágrafo "GERENCIAMENTO DE PIPELINE" (genérico, sem hardcodar pipeline/estágio) para o agente chamar `add_to_pipeline`/`move_to_stage` proativamente — hotfixado em produção em 13/06/2026, ver Fix 19 |

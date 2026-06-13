@@ -169,18 +169,37 @@ def create_pipeline_manipulation_tool(
             }
         """
         try:
-            # Extract IDs from metadata if not provided
-            effective_contact_id = contact_id
-            if not effective_contact_id and tool_context:
+            # Prefer IDs extracted from trusted session context over whatever
+            # the LLM passed in. The model frequently confuses contact_id and
+            # conversation_id when reading them back from {_system_data}, and
+            # an LLM-supplied ID silently overriding the real conversation_id
+            # causes the CRM API to 404 ("conversa não encontrada no pipeline").
+            effective_contact_id = None
+            if tool_context:
                 effective_contact_id = _extract_contact_id_from_metadata(tool_context)
                 if effective_contact_id:
                     logger.info(f"Extracted contact_id from metadata: {effective_contact_id}")
+            if not effective_contact_id:
+                effective_contact_id = contact_id
 
-            effective_conversation_id = conversation_id
-            if not effective_conversation_id and tool_context:
+            effective_conversation_id = None
+            if tool_context:
                 effective_conversation_id = _extract_conversation_id_from_metadata(tool_context)
                 if effective_conversation_id:
                     logger.info(f"Extracted conversation_id from metadata: {effective_conversation_id}")
+            if not effective_conversation_id:
+                effective_conversation_id = conversation_id
+
+            if conversation_id and effective_conversation_id != conversation_id:
+                logger.warning(
+                    f"Ignoring LLM-supplied conversation_id={conversation_id} "
+                    f"in favor of context-extracted conversation_id={effective_conversation_id}"
+                )
+            if contact_id and effective_contact_id != contact_id:
+                logger.warning(
+                    f"Ignoring LLM-supplied contact_id={contact_id} "
+                    f"in favor of context-extracted contact_id={effective_contact_id}"
+                )
 
             # Get pipeline_rules from tool context if not provided during tool creation
             available_pipeline_rules = default_pipeline_rules
