@@ -5,6 +5,8 @@ from google.adk.tools import FunctionTool, ToolContext
 import traceback
 
 from .base import GoogleCalendarClient
+from .reminders import _extract_context_ids, cancel_meeting_reminders
+from src.services.adk.tools.evo_crm.base import EvoCrmClient
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -106,6 +108,24 @@ def create_delete_calendar_event_tool(
                 return result
 
             logger.info(f"Event {event_id} deleted successfully")
+
+            # Cancelar lembretes de reunião vinculados ao evento
+            try:
+                ctx_ids = _extract_context_ids(tool_context)
+                if ctx_ids["conversation_id"]:
+                    crm_client = EvoCrmClient()
+                    await cancel_meeting_reminders(
+                        client=crm_client,
+                        conversation_id=ctx_ids["conversation_id"],
+                        google_event_id=event_id,
+                    )
+                else:
+                    logger.warning(
+                        "Could not cancel meeting reminders: conversation_id not found in context"
+                    )
+            except Exception as reminder_err:
+                logger.warning(f"Failed to cancel meeting reminders: {reminder_err}")
+
             return {
                 "status": "success",
                 "message": "Event cancelled successfully",

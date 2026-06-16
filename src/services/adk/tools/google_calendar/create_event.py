@@ -6,6 +6,8 @@ from google.adk.tools import FunctionTool, ToolContext
 import traceback
 
 from .base import GoogleCalendarClient
+from .reminders import _extract_context_ids, create_meeting_reminders
+from src.services.adk.tools.evo_crm.base import EvoCrmClient
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -15,7 +17,8 @@ def create_calendar_event_tool(
     agent_id: Optional[str] = None,
     calendar_config: Optional[Dict[str, Any]] = None,
     credentials_config: Optional[Dict[str, Any]] = None,
-    db=None
+    db=None,
+    meeting_reminders: Optional[List[Dict[str, Any]]] = None,
 ) -> FunctionTool:
     """
     Create a tool for creating Google Calendar events.
@@ -235,6 +238,32 @@ def create_calendar_event_tool(
                     response["message"] += f" and invitations sent to {len(attendees)} attendee(s)"
 
             logger.info(f"Event created successfully: {event_details.get('id')}")
+
+            # Criar lembretes de reunião via WhatsApp (ScheduledActions)
+            google_event_id = event_details.get("id")
+            if meeting_reminders and google_event_id:
+                try:
+                    ctx_ids = _extract_context_ids(tool_context)
+                    if ctx_ids["conversation_id"] and ctx_ids["contact_id"]:
+                        crm_client = EvoCrmClient()
+                        await create_meeting_reminders(
+                            client=crm_client,
+                            conversation_id=ctx_ids["conversation_id"],
+                            contact_id=ctx_ids["contact_id"],
+                            google_event_id=google_event_id,
+                            start_dt=start_dt,
+                            title=title,
+                            contact_data=ctx_ids["contact_data"],
+                            meeting_reminders=meeting_reminders,
+                            meet_link=event_details.get("meet_link", ""),
+                        )
+                    else:
+                        logger.warning(
+                            "Could not create meeting reminders: conversation_id or contact_id not found in context"
+                        )
+                except Exception as reminder_err:
+                    logger.warning(f"Failed to create meeting reminders: {reminder_err}")
+
             return response
 
         except Exception as e:

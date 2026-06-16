@@ -68,7 +68,11 @@ def get_async_db_url(db_url: str) -> str:
 # DatabaseSessionService requires async driver (asyncpg)
 db_url = os.getenv("POSTGRES_CONNECTION_STRING")
 async_db_url = get_async_db_url(db_url) if db_url else None
-session_service = DatabaseSessionService(db_url=async_db_url)
+session_service = DatabaseSessionService(
+    db_url=async_db_url,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+)
 
 
 # Initialize artifacts service using the factory

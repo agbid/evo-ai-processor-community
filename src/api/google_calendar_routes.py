@@ -343,6 +343,7 @@ async def complete_authorization(
 )
 async def get_calendars(
     agent_id: str,
+    request: Request,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
     db: Session = Depends(get_db),
 ):
@@ -431,6 +432,7 @@ async def save_configuration(
 )
 async def disconnect(
     agent_id: str,
+    request: Request,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
 ):
     """
@@ -470,7 +472,8 @@ async def disconnect(
 )
 async def check_availability(
     agent_id: str,
-    request: AvailabilityRequest,
+    body: AvailabilityRequest,
+    http_request: Request,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
 ):
     """
@@ -481,13 +484,13 @@ async def check_availability(
     try:
         result = await service.check_availability(
             agent_id=agent_id,
-            calendar_id=request.calendarId,
-            start=request.start,
-            end=request.end
+            calendar_id=body.calendarId,
+            start=body.start,
+            end=body.end
         )
 
         slots_data = [AvailabilitySlot(**slot).model_dump() if isinstance(slot, dict) else slot.model_dump() if hasattr(slot, 'model_dump') else slot for slot in result.get("slots", [])]
-        
+
         return success_response(
             data={
                 "available": result["available"],
@@ -499,7 +502,7 @@ async def check_availability(
     except ValueError as e:
         logger.error(f"No credentials found: {e}")
         return error_response(
-            request=request,
+            request=http_request,
             code=map_status_to_error_code(status.HTTP_404_NOT_FOUND),
             message="Google Calendar not connected",
             status_code=status.HTTP_404_NOT_FOUND
@@ -507,7 +510,7 @@ async def check_availability(
     except Exception as e:
         logger.error(f"Error checking availability: {e}")
         return error_response(
-            request=request,
+            request=http_request,
             code=map_status_to_error_code(status.HTTP_500_INTERNAL_SERVER_ERROR),
             message=f"Failed to check availability: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR

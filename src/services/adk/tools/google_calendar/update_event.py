@@ -6,6 +6,8 @@ from google.adk.tools import FunctionTool, ToolContext
 import traceback
 
 from .base import GoogleCalendarClient
+from .reminders import _extract_context_ids, update_meeting_reminders
+from src.services.adk.tools.evo_crm.base import EvoCrmClient
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -15,7 +17,8 @@ def create_update_calendar_event_tool(
     agent_id: Optional[str] = None,
     calendar_config: Optional[Dict[str, Any]] = None,
     credentials_config: Optional[Dict[str, Any]] = None,
-    db=None
+    db=None,
+    meeting_reminders: Optional[List[Dict[str, Any]]] = None,
 ) -> FunctionTool:
     """
     Create a tool for updating (rescheduling/editing) Google Calendar events.
@@ -214,6 +217,29 @@ def create_update_calendar_event_tool(
             }
 
             logger.info(f"Event updated successfully: {event_details.get('id')}")
+
+            # Reagendar lembretes de reunião se a data/hora mudou
+            if start_dt is not None and meeting_reminders:
+                try:
+                    ctx_ids = _extract_context_ids(tool_context)
+                    if ctx_ids["conversation_id"]:
+                        crm_client = EvoCrmClient()
+                        await update_meeting_reminders(
+                            client=crm_client,
+                            conversation_id=ctx_ids["conversation_id"],
+                            google_event_id=event_id,
+                            new_start_dt=start_dt,
+                            title=title or event_details.get("summary", ""),
+                            contact_data=ctx_ids["contact_data"],
+                            meeting_reminders=meeting_reminders,
+                        )
+                    else:
+                        logger.warning(
+                            "Could not update meeting reminders: conversation_id not found in context"
+                        )
+                except Exception as reminder_err:
+                    logger.warning(f"Failed to update meeting reminders: {reminder_err}")
+
             return response
 
         except Exception as e:

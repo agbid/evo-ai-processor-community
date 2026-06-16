@@ -630,7 +630,8 @@ class GoogleCalendarService:
                 url = f"{self.core_service_url}/agents/{agent_id}/integrations/google_calendar_credentials"
                 response = await self.http_client.get(url)
 
-                if response.status_code == 404:
+                if response.status_code in (404, 500):
+                    # 404 = not found (expected); 500 = evo-core bug when rows=0
                     return None
 
                 response.raise_for_status()
